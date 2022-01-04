@@ -1,13 +1,11 @@
 ﻿#include "Notitia/Serialization/NotitiaObjectSerializer.h"
 #include "Notitia/Debug/NotitiaLogging.h"
-#include "Notitia/Temp/NotitiaPropertyContainer.h"
 #include "JsonObjectConverter.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Engine/AssetManager.h"
 #include "Kismet/GameplayStatics.h"
 #include "Notitia/Core/NotitiaDeveloperSettings.h"
 #include "Notitia/Core/NotitiaGISubsystem.h"
-#include "Notitia/Serialization/NotitiaObjectSerializer.h"
 
 class FNetPropertyHook;
 
@@ -18,6 +16,7 @@ bool FNotitiaObjectSerializer::SerializeObject(UObject* Object, TSharedPtr<FJson
 		return false;
 	}
 
+	// TODO: do any UObjects not have a world? What about UObjects in UGameInstance? Should I revamp this? I'm only using this to get the NotitiaGISubsystem
 	UWorld* World = Object->GetWorld();
 	if (!IsValid(World))
 	{
@@ -60,14 +59,18 @@ bool FNotitiaObjectSerializer::SerializeObject_Internal(UObject* Object, TShared
 	NOTITIA_LOG_VERBOSE("DynamicObjectSerializer - serializing: %s", *Object->GetName());
 
 	TSharedPtr<FJsonObject> ObjectJSON = MakeShareable(new FJsonObject());
-	
+
+	if (Object->GetName().Contains("Cube"))
+	{
+		NOTITIA_LOG_VERBOSE("Cube");
+	}
 	ObjectJSON->SetStringField("Class", Class->GetFName().ToString());
 	FString ObjectName = Object->GetFName().ToString();
 
 	TSoftObjectPtr<UObject> SoftObjectPtr(Object);
 	FString SoftObjectPtrPath = SoftObjectPtr.ToString();
 	SoftObjectPtrPath = Object->GetWorld()->RemovePIEPrefix(SoftObjectPtrPath);
-	ObjectJSON->SetStringField("Path", SoftObjectPtrPath);
+	//ObjectJSON->SetStringField("Path", SoftObjectPtrPath);
 	
 	if (UWorld* World = Object->GetWorld())
 	{
@@ -75,7 +78,7 @@ bool FNotitiaObjectSerializer::SerializeObject_Internal(UObject* Object, TShared
 		{
 			if (UNotitiaGISubsystem* GISubsystem = GameInstance->GetSubsystem<UNotitiaGISubsystem>())
 			{
-				uint64 ObjectId = GISubsystem->GetIdForObject(Object);
+				int32 ObjectId = GISubsystem->GetIdForObject(Object);
 				FString ObjectIdString = FString::Printf(TEXT("%llu"), ObjectId);
 				TSharedPtr<FJsonValueNumberString> ObjectIdJSON = MakeShared<FJsonValueNumberString>(ObjectIdString);
 
@@ -104,7 +107,7 @@ bool FNotitiaObjectSerializer::SerializeObject_Internal(UObject* Object, TShared
 
 	if (ObjectJSON->Values.Num() > 0)
 	{
-		ObjectsContainerJSON->SetObjectField(ObjectName, ObjectJSON);
+		ObjectsContainerJSON->SetObjectField(SoftObjectPtrPath, ObjectJSON);
 	}
 	
 	return true;
@@ -115,20 +118,20 @@ bool FNotitiaObjectSerializer::SetupPrerequisites(const UObject* Object, const U
 	OutDeveloperSettings =  GetDefault<UNotitiaDeveloperSettings>();
 	OutClass = Object->GetClass();
 
+	// TODO: Options to save ALL objects or only selected ones? Options to delete unsaved objects or not?
+	/*
 	bool bExactMatch;
 	if (!OutDeveloperSettings->ContainsClass(OutClass, bExactMatch))
 	{
-		//NOTITIA_LOG_VERBOSE("Skipping %s", *Object->GetName());
 		return false;
 	}
-
+	*/
+	
 	return true;
 }
 
 bool FNotitiaObjectSerializer::TrySaveProperty(const UObject* Object, TArray<FName>& PropertyPath, FProperty* Property, TSharedPtr<FJsonObject> PropertiesJSON, TSharedPtr<FJsonObject> ObjectsContainerJSON)
 {
-	const UNotitiaDeveloperSettings* DeveloperSettings = GetDefault<UNotitiaDeveloperSettings>();
-
 	UNotitiaGISubsystem* NotitiaGISubsystem = Object->GetWorld()->GetGameInstance()->GetSubsystem<UNotitiaGISubsystem>();
 
 	UClass* PropertyClass = Property->GetOwnerClass();
@@ -140,11 +143,18 @@ bool FNotitiaObjectSerializer::TrySaveProperty(const UObject* Object, TArray<FNa
 	
 	FName PropertyPathFName = NotitiaGISubsystem->GenerateFName(PropertyClass, PropertyPath);
 
-	if (NotitiaGISubsystem->IsPropertyMarkedForSerialization(PropertyPathFName))
+	// TODO options for force-saving of UObject fields
+	bool bForceSave = Property->IsA(FObjectProperty::StaticClass());
+	
+	if (NotitiaGISubsystem->IsPropertyMarkedForSerialization(PropertyPathFName) || bForceSave)
 	{
 		TSharedPtr<FJsonValue> PropertyJSON = UPropertyToJsonValue(Property, Property->ContainerPtrToValuePtr<void*>(Object), nullptr, ObjectsContainerJSON);
-		PropertiesJSON->SetField(Property->GetNameCPP(), PropertyJSON);
-		return true;
+		
+		if (PropertyJSON.IsValid())
+		{
+			PropertiesJSON->SetField(Property->GetNameCPP(), PropertyJSON);
+			return true;
+		}
 	}
 	else
 	{
@@ -178,7 +188,7 @@ TSharedPtr<FJsonValue> FNotitiaObjectSerializer::ConvertScalarFPropertyToJsonVal
 		FString StringValue = EnumDef->GetNameStringByValue(EnumProperty->GetUnderlyingProperty()->GetSignedIntPropertyValue(Value));
 		return MakeShared<FJsonValueString>(StringValue);
 	}
-	else if (FNumericProperty *NumericProperty = CastField<FNumericProperty>(Property))
+	else if (FNumericProperty* NumericProperty = CastField<FNumericProperty>(Property))
 	{
 		// see if it's an enum
 		UEnum* EnumDef = NumericProperty->GetIntPropertyEnum();
@@ -201,27 +211,27 @@ TSharedPtr<FJsonValue> FNotitiaObjectSerializer::ConvertScalarFPropertyToJsonVal
 
 		// fall through to default
 	}
-	else if (FBoolProperty *BoolProperty = CastField<FBoolProperty>(Property))
+	else if (FBoolProperty* BoolProperty = CastField<FBoolProperty>(Property))
 	{
 		// Export bools as bools
 		return MakeShared<FJsonValueBoolean>(BoolProperty->GetPropertyValue(Value));
 	}
-	else if (FStrProperty *StringProperty = CastField<FStrProperty>(Property))
+	else if (FStrProperty* StringProperty = CastField<FStrProperty>(Property))
 	{
 		return MakeShared<FJsonValueString>(StringProperty->GetPropertyValue(Value));
 	}
-	else if (FTextProperty *TextProperty = CastField<FTextProperty>(Property))
+	else if (FTextProperty* TextProperty = CastField<FTextProperty>(Property))
 	{
 		return MakeShared<FJsonValueString>(TextProperty->GetPropertyValue(Value).ToString());
 	}
-	else if (FArrayProperty *ArrayProperty = CastField<FArrayProperty>(Property))
+	else if (FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property))
 	{
 		TArray< TSharedPtr<FJsonValue> > Out;
 		FScriptArrayHelper Helper(ArrayProperty, Value);
 		for (int32 i=0, n=Helper.Num(); i<n; ++i)
 		{
 			TSharedPtr<FJsonValue> Elem = UPropertyToJsonValue(ArrayProperty->Inner, Helper.GetRawPtr(i), ArrayProperty, ObjectsContainerJSON);
-			if ( Elem.IsValid() )
+			if (Elem.IsValid())
 			{
 				// add to the array
 				Out.Push(Elem);
@@ -238,7 +248,7 @@ TSharedPtr<FJsonValue> FNotitiaObjectSerializer::ConvertScalarFPropertyToJsonVal
 			if ( Helper.IsValidIndex(i) )
 			{
 				TSharedPtr<FJsonValue> Elem = UPropertyToJsonValue(SetProperty->ElementProp, Helper.GetElementPtr(i), SetProperty, ObjectsContainerJSON);
-				if ( Elem.IsValid() )
+				if (Elem.IsValid())
 				{
 					// add to the array
 					Out.Push(Elem);
@@ -260,7 +270,7 @@ TSharedPtr<FJsonValue> FNotitiaObjectSerializer::ConvertScalarFPropertyToJsonVal
 			{
 				TSharedPtr<FJsonValue> KeyElement = UPropertyToJsonValue(MapProperty->KeyProp, Helper.GetKeyPtr(i), MapProperty, ObjectsContainerJSON);
 				TSharedPtr<FJsonValue> ValueElement = UPropertyToJsonValue(MapProperty->ValueProp, Helper.GetValuePtr(i), MapProperty, ObjectsContainerJSON);
-				if ( KeyElement.IsValid() && ValueElement.IsValid() )
+				if (KeyElement.IsValid() && ValueElement.IsValid())
 				{
 					FString KeyString;
 					if (!KeyElement->TryGetString(KeyString))
@@ -306,43 +316,53 @@ TSharedPtr<FJsonValue> FNotitiaObjectSerializer::ConvertScalarFPropertyToJsonVal
 
 		if (Object)
 		{
+			// Ensure this object is serialized. This ensures that it will have a NotitiaID
+			SerializeObject(Object, ObjectsContainerJSON);
+			
 			if (ObjectProperty->HasAnyPropertyFlags(CPF_PersistentInstance) || (OuterProperty && OuterProperty->HasAnyPropertyFlags(CPF_PersistentInstance)))
 			{
-				// TODO Instanced property, what do?
+				TSharedRef<FJsonObject> ObjectJSON = MakeShared<FJsonObject>();
+
+				ObjectJSON->SetStringField(ObjectClassNameKey, Object->GetClass()->GetFName().ToString());
+
+				TSharedRef<FJsonValueObject> ObjectJSONValue = MakeShared<FJsonValueObject>(ObjectJSON);
+				ObjectJSONValue->Type = EJson::Object;
+				return ObjectJSONValue;
 			}
 			else
 			{
 				// Actor or asset reference
-				// TODO how can I check for an asset reference?
 				if (UWorld* World = Object->GetWorld())
 				{
 					if (UGameInstance* GameInstance = World->GetGameInstance())
 					{
 						if (UNotitiaGISubsystem* GISubsystem = GameInstance->GetSubsystem<UNotitiaGISubsystem>())
 						{
-							SerializeObject(Object, ObjectsContainerJSON);
-							
-							uint64 ObjectId = GISubsystem->GetIdForObject(Object);
+							int32 ObjectId = GISubsystem->GetIdForObject(Object);
+
+							NOTITIA_LOG_VERBOSE("Creating Notitia ID %i", ObjectId);
+							return MakeShared<FJsonValueNumber>(ObjectId);
+							/*
+							int32 ObjectId = GISubsystem->GetIdForObject(Object);
 							FString ObjectIdString = FString::Printf(TEXT("%llu"), ObjectId);
 							
-							TSharedPtr<FJsonObject> ObjectJSON = MakeShareable(new FJsonObject());
-							FString ObjectName;
-							
-							return MakeShared<FJsonValueNumberString>(ObjectIdString);
+							return MakeShared<FJsonValueNumberString>(ObjectIdString);*/
 						}
 					}
 				}
 				else
 				{
-					check(false);
+					//return MakeShared<FJsonValueNumberString>("0");
 				}
 			}
 		}
 		else
 		{
-			FString StringValue;
-			Property->ExportTextItem(StringValue, Value, nullptr, nullptr, PPF_None);
-			return MakeShared<FJsonValueString>(StringValue);
+			// TODO replace 0 with constexpr
+			return MakeShared<FJsonValueNumber>(0);
+			//FString StringValue;
+			//Property->ExportTextItem(StringValue, Value, nullptr, nullptr, PPF_None);
+			//return MakeShared<FJsonValueString>(StringValue);
 		}
 		/*
 		// Instanced properties should be copied by value, while normal UObject* properties should output as asset references
@@ -376,7 +396,7 @@ TSharedPtr<FJsonValue> FNotitiaObjectSerializer::ConvertScalarFPropertyToJsonVal
 	}
 
 	// invalid
-	return TSharedPtr<FJsonValue>();
+	return nullptr;TSharedPtr<FJsonValue>();
 }
 
 TSharedPtr<FJsonValue> FNotitiaObjectSerializer::UPropertyToJsonValue(FProperty* Property, const void* Value, FProperty* OuterProperty, TSharedPtr<FJsonObject> ObjectsContainerJSON)
@@ -389,7 +409,12 @@ TSharedPtr<FJsonValue> FNotitiaObjectSerializer::UPropertyToJsonValue(FProperty*
 	TArray< TSharedPtr<FJsonValue> > Array;
 	for (int Index = 0; Index != Property->ArrayDim; ++Index)
 	{
-		Array.Add(ConvertScalarFPropertyToJsonValue(Property, (char*)Value + Index * Property->ElementSize, OuterProperty, ObjectsContainerJSON));
+		TSharedPtr<FJsonValue> PropertyJSON = ConvertScalarFPropertyToJsonValue(Property, (char*)Value + Index * Property->ElementSize, OuterProperty, ObjectsContainerJSON);
+
+		if (PropertyJSON.IsValid())
+		{
+			Array.Add(PropertyJSON);
+		}
 	}
 	return MakeShared<FJsonValueArray>(Array);
 }

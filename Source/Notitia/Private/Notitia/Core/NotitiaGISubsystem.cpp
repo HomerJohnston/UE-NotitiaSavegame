@@ -4,18 +4,22 @@
 #include "Notitia/Debug/NotitiaLogging.h"
 #include "Algo/ForEach.h"
 #include "Compression/lz4.h"
+#include "Kismet/GameplayStatics.h"
+#include "Notitia/Core/NotitiaWorldSubsystem.h"
 #include "UObject/PropertyIterator.h"
 
 namespace Notitia_Private
 {
-	TAtomic<uint64> GNextID(1);
+	TAtomic<int32> GNextID(1);
 }
 
+// TODO constexpr? global? in a shared header?
 #define NOTITIA_NULL_IDENTIFIER 0
 
 bool UNotitiaGISubsystem::bIsInitialized = false;
 FOnInitializeEvent UNotitiaGISubsystem::OnInitialize;
 FOnInitializeEvent UNotitiaGISubsystem::OnDeinitialize;
+TWeakObjectPtr<UGameInstance> UNotitiaGISubsystem::GameInstance;
 
 /*
 bool UNotitiaGISubsystem::ShouldCreateSubsystem(UObject* Outer) const
@@ -33,9 +37,16 @@ void UNotitiaGISubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Super::Initialize(Collection);
 
 	BuildPropertiesSet();
-
+	
+	GameInstance = GetGameInstance();
+	
 	OnInitialize.Broadcast();
 	bIsInitialized = true;
+}
+
+void UNotitiaGISubsystem::SetWorldSubsystem(UNotitiaWorldSubsystem* InWorldSubsystem)
+{
+	WorldSubsystem = InWorldSubsystem;
 }
 
 void UNotitiaGISubsystem::Deinitialize()
@@ -76,7 +87,9 @@ void UNotitiaGISubsystem::Save(FString Filename)
 {
 	NOTITIA_LOG_VERBOSE("Running save...");
 
-	// Notitia_Private::GNextID = 1;
+	Notitia_Private::GNextID = 1;
+	ObjectGUIDMap.Empty();
+	ObjectGUIDReverseMap.Empty();
 	
 	TSharedPtr<FJsonObject> SaveJSON = MakeShareable(new FJsonObject());
 
@@ -85,11 +98,8 @@ void UNotitiaGISubsystem::Save(FString Filename)
 	FString OutputString;
 	TSharedRef<TJsonWriter<>> StringWriter = TJsonWriterFactory<>::Create(&OutputString);
 	FJsonSerializer::Serialize(SaveJSON.ToSharedRef(), StringWriter);
-
 	
-	
-	NOTITIA_LOG_WARNING("Generated SaveJSON:");
-	//NOTITIA_LOG_VERBOSE("%s", *OutputString);
+	NOTITIA_LOG_WARNING("Generated SaveJSON");
 
 	if (Filename.IsEmpty())
 	{
@@ -129,26 +139,25 @@ bool UNotitiaGISubsystem::IsPropertyMarkedForSerialization(FName PropertyPath)
 	return SerializedPropertyPaths.Contains(PropertyPath);
 }
 
-
 bool UNotitiaGISubsystem::AssignIdForObject(UObject* Object)
 {
-	uint64* ID = ObjectGUIDMap.Find(Object);
+	int32* ID = ObjectGUIDMap.Find(Object);
 
 	if (ID)
 	{
 		return false;
 	}
 
-	uint64 newID = GenerateUniqueID();
+	int32 newID = GenerateUniqueID();
 	ObjectGUIDMap.Add(Object, newID);
 	ObjectGUIDReverseMap.Add(newID, Object);
 
 	return true;
 }
 
-uint64 UNotitiaGISubsystem::GetIdForObject(UObject* Object)
+int32 UNotitiaGISubsystem::GetIdForObject(UObject* Object)
 {
-	uint64* ID = ObjectGUIDMap.Find(Object);
+	int32* ID = ObjectGUIDMap.Find(Object);
 
 	if (ID)
 	{
@@ -158,7 +167,7 @@ uint64 UNotitiaGISubsystem::GetIdForObject(UObject* Object)
 	return NOTITIA_NULL_IDENTIFIER;
 }
 
-UObject* UNotitiaGISubsystem::GetObjectForID(uint64 Id)
+UObject* UNotitiaGISubsystem::GetObjectForID(int32 Id)
 {
 	UObject** Result = ObjectGUIDReverseMap.Find(Id);
 
@@ -172,8 +181,13 @@ UObject* UNotitiaGISubsystem::GetObjectForID(uint64 Id)
 
 void UNotitiaGISubsystem::Load(FString Filename)
 {
-	NOTITIA_LOG_VERBOSE("Running save...");
-
+	NOTITIA_LOG_VERBOSE("Running load...");
+	
+	if (Filename.IsEmpty())
+	{
+		Filename = "Savegame";
+	}
+	
 	Filename = FPaths::Combine(FPaths::ProjectSavedDir(), Filename);
 
 	FString InputString;
@@ -181,17 +195,26 @@ void UNotitiaGISubsystem::Load(FString Filename)
 	
 	TSharedPtr<FJsonObject> RootJsonObject;
 	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(InputString);
-
+	
 	if (FJsonSerializer::Deserialize(Reader, RootJsonObject))
 	{
+		TSharedPtr<FJsonObject> PersistentLevelJSON = RootJsonObject->GetObjectField("PersistentLevel");
+		FString PersistentLevelPackage = PersistentLevelJSON->GetStringField("PackageName");
+		//UGameplayStatics::OpenLevel(WorldSubsystem->GetWorld(), FName(PersistentLevelPackage));
+
 		OnLoadBegin.Broadcast(RootJsonObject);
 	}
 }
 
-uint64 UNotitiaGISubsystem::GenerateUniqueID()
+TWeakObjectPtr<UGameInstance> UNotitiaGISubsystem::GetStaticGameInstance()
+{
+	return GameInstance;
+}
+
+int32 UNotitiaGISubsystem::GenerateUniqueID()
 {
 	// Check for the next-to-impossible event that we wrap round to 0, because we reserve 0.
-	uint64 NewID = ++Notitia_Private::GNextID;
+	int32 NewID = ++Notitia_Private::GNextID;
 
 	if (NewID == NOTITIA_NULL_IDENTIFIER)
 	{

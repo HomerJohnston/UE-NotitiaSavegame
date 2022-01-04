@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "NotitiaGISubsystem.generated.h"
 
+class UNotitiaWorldSubsystem;
 DECLARE_MULTICAST_DELEGATE(FOnInitializeEvent)
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnSaveBegin, TSharedPtr<FJsonObject>);
 
@@ -18,11 +19,15 @@ protected:
 	TSet<FName> SerializedPropertyPaths;
 
 	/**  */
-	TMap<UObject*, uint64> ObjectGUIDMap;
+	TMap<UObject*, int32> ObjectGUIDMap;
 
 	/**  */
-	TMap<uint64, UObject*> ObjectGUIDReverseMap;
+	TMap<int32, UObject*> ObjectGUIDReverseMap;
 
+	TWeakObjectPtr<UNotitiaWorldSubsystem> WorldSubsystem;
+	
+	static TWeakObjectPtr<UGameInstance> GameInstance;
+	
 // Public state
 public:
 	/**  */
@@ -43,12 +48,15 @@ public:
 // Creation
 public:
 	/**  */
-	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
+	void Initialize(FSubsystemCollectionBase& Collection) override;
 
 	/**  */
-	virtual void Deinitialize() override;
+	void SetWorldSubsystem(UNotitiaWorldSubsystem* InWorldSubsystem);
 
-// Creation helpers
+	/**  */
+	void Deinitialize() override;
+	
+	// Creation helpers
 protected:
 	/**  */
 	void BuildPropertiesSet();
@@ -69,18 +77,21 @@ public:
 	bool AssignIdForObject(UObject* Object);
 	
 	/**  */
-	uint64 GetIdForObject(UObject* Object);
+	int32 GetIdForObject(UObject* Object);
 
 	/**  */
-	UObject* GetObjectForID(uint64 Id);
+	UObject* GetObjectForID(int32 Id);
 
 	/**  */
+	UFUNCTION(BlueprintCallable)
 	void Load(FString Filename = "");
+
+	static TWeakObjectPtr<UGameInstance> GetStaticGameInstance();
 	
 // Internal helpers
 protected:
 	/**  */
-	uint64 GenerateUniqueID();
+	int32 GenerateUniqueID();
 
 public:
 	FName GenerateFName(const UClass* Class, const TArray<FName>& PropertyPath) const;

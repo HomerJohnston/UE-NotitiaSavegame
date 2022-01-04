@@ -23,26 +23,27 @@ public:
 private:
 	
 	UPROPERTY()
-	uint64 NextIdentifier;
+	int32 NextIdentifier;
 
 	///** Store all saveable actors/components in this map */ 
 	//UPROPERTY()
-	//TMap<uint64, TScriptInterface<INotitiaSaveable>> IdentifierToSaveablesMap;
+	//TMap<int32, TScriptInterface<INotitiaSaveable>> IdentifierToSaveablesMap;
 
 	/** Store level actors/components in this map */
 	UPROPERTY()
-	TMap<uint64, FString> IdentifierToSaveablesPathsMap;
+	TMap<int32, FString> IdentifierToSaveablesPathsMap;
 
 	/** Reverse lookup for save/load processes */
 	UPROPERTY()
-	TMap<UObject*, uint64> ObjectToIdentifierMap;
+	TMap<UObject*, int32> ObjectToIdentifierMap;
 
 	FDelegateHandle OnGISubsystemInitializeCompleteHandle;
-	FDelegateHandle OnSaveBeginHandle;
-
-	UPROPERTY()
-	TSet<AActor*> LevelActors;
 	
+	FDelegateHandle OnSaveBeginHandle;
+	
+	FDelegateHandle OnLoadBeginHandle;
+
+	TMap<FName, UObject*> InitialLevelObjects;
 // ------------------------------------------------------------------------------------------------
 // Overridden API
 	/**  */
@@ -79,14 +80,21 @@ public:
 	void OnLoadBegin(TSharedPtr<FJsonObject> LoadJSON) const;
 
 	/**  */
-	void LoadPersistentLevel(TSharedPtr<FJsonObject> LoadJSON) const;
+	void OnLevelChanged(ULevel* Level, UWorld* World) const;
+	
+	/**  */
+	void GetLevelObjectIDs(TMap<int32, UObject*> Map) const;
+	
+	/**  */
+	void LoadPersistentLevel(TSharedPtr<FJsonObject> LoadJSON, TMap<FName, UObject*>& LevelObjects) const;
 
 // ------------------------------------------------------------------------------------------------
 // Private API
 private:
 
 	/**  */
-	bool ActorIsDynamic(const AActor* Actor) const;
-
 	void OnPostWorldInitialization(UWorld* World, const UWorld::InitializationValues IVS);
+
+	/**  */
+	void StashLevelObjects(UWorld* World);
 };
